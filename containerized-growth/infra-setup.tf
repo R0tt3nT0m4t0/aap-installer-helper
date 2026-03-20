@@ -2,24 +2,25 @@ terraform {
   required_providers {
     libvirt = {
         source = "dmacvicar/libvirt"
+        version = "0.7.6"
     }
   }
 }
 
 provider "libvirt" {
-  uri = "qemu://system"
+  uri = "qemu:///system"
 }
 
-# Storage 
+# Storage for OS Disk
 
 resource "libvirt_volume" "aap_virt_disk" {
-  name = "aap_virt_disk"
+  name = "aap_virt_disk.qcow2"
   pool = "default"
-  size = 300 * 1024 * 1024 * 1024  # 300GB
+  size = 322122547200 # 300GB in bytes
   format = "qcow2"
 }
 
-# Machine
+# Machine definition
 
 resource "libvirt_domain" "aap_virt_vm" {
   name = "aap_virt_vm"
@@ -31,10 +32,12 @@ resource "libvirt_domain" "aap_virt_vm" {
     mode = "host-passthrough"
   }
 
+  # Installation media (CDROM)
   disk {
-    file = "/downloads/iso/rhel-9.5-x86_64-dvd.iso"
+    file = "/var/lib/libvirt/images/rhel-10.0-x86_64-dvd.iso"
   }
 
+  # Main storage (HDD)
   disk {
     volume_id = libvirt_volume.aap_virt_disk.id
   }
@@ -47,6 +50,10 @@ resource "libvirt_domain" "aap_virt_vm" {
     network_name = "default"
     wait_for_lease = true
   }
+
+#  network_interface {
+#    bridge = "br0"
+#  }
 
   console {
     type = "pty"
@@ -63,10 +70,10 @@ resource "libvirt_domain" "aap_virt_vm" {
   graphics {
     type = "spice"
     autoport = true
-    liste_type = "address"
+    listen_type = "address"
   }
 }
 
 output "vm_ip_address" {
-  value = libvirt_domain.aap_virt_vm.network_interface[0].addresses[0]
+  value = length(libvirt_domain.aap_virt_vm.network_interface[0].addresses) > 0 ? libvirt_domain.aap_virt_vm.network_interface[0].addresses[0] : "Waiting for IP..."
 }
