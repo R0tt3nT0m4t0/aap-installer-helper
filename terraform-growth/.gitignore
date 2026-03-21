@@ -5,7 +5,6 @@
 
 # Terraform working directories
 .terraform/
-.terraform.lock.hcl
 
 # Variable files (may contain secrets)
 *.tfvars
@@ -40,3 +39,11 @@ id_ed25519*
 
 # Logs
 *.log
+
+# Virtual Machine Images
+*.qcow2
+*.iso
+*.img
+
+# Ansible
+*.retry

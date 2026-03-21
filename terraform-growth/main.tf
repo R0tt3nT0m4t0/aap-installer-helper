@@ -67,7 +67,8 @@ resource "libvirt_domain" "aap_vm" {
   }
 
   graphics {
-    type        = "spice"
+    # Changed spice to vnc due to cockpit struguling with spice
+    type        = "vnc"
     listen_type = "address"
     autoport    = true
   }
