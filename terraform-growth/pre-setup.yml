@@ -1,0 +1,186 @@
+---
+
+- name: Pre-configuration of the RHEL server for the AAP Containerized Installation
+  hosts: localhost
+  become: true
+
+  vars:
+    admin_user: ansible
+    #  Red Hat Registration Variables you need one or the other not both
+    # Using credentials
+    rhsm_username: ""
+    rhsm_password: ""
+    # Using token
+    rhsm_activationkey: ""
+    rhsm_org_id: ""
+
+  tasks:
+
+    - name: Register systems in the host table
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        block: |
+          {{ ansible_facts['default_ipv4']['address'] }} {{ ansible_facts['fqdn'] }}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - AAP HOSTS"
+        insertafter: "^::1"
+        state: present
+
+    - name: Ensure the installer user exist and its and administrator
+      ansible.builtin.user:
+        name: "{{ admin_user }}"
+        comment: "Ansible Administrator"
+        group: ansible
+        groups: wheel
+        generate_ssh_key: true
+        ssh_key_bits: 4096
+        ssh_key_file: ~/.ssh/id_rsa
+        state: present
+        create_home: true
+
+    - name: Ensure installer user has sudo access
+      ansible.builtin.copy:
+        content: "{{ admin_user }} ALL=(ALL) NOPASSWD: ALL"
+        dest: /etc/sudoers.d/{{ admin_user }}
+        mode: "0440"
+        owner: root
+        group: root
+
+    - name: Allowing services of the installer user to run when not logged in
+      ansible.builtin.command: loginctl enable-linger {{ admin_user }}
+      changed_when: false
+
+    - name: Generate SSH Keys without password for the user {{ item }}
+      community.crypto.openssh_keypair:
+        path: "{{ (item == 'root') | ternary('/root/.ssh/id_rsa', '/home/' + item + '/.ssh/id_rsa') }}"
+        type: "rsa"
+        size: 4096
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        passphrase: ""
+        mode: '0600'
+        state: present
+        force: false
+      loop:
+        - "{{ admin_user }}"
+        - root
+
+    - name: Ensure .ssh directory exists for the user {{ item }}
+      ansible.builtin.file:
+        path: "{{ (item == 'root') | ternary('/root/.ssh', '/home/' + item + '/.ssh') }}"
+        state: directory
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: '0700'
+      loop:
+        - "{{ admin_user }}"
+        - root
+
+    - name: Ensure authorized_keys file exist and has proper modes for {{ item }}
+      ansible.builtin.copy:
+        dest: "{{ (item == 'root') | ternary('/root/.ssh/authorized_keys', '/home/' + item + '/.ssh/authorized_keys') }}"
+        content: ""
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: '0600'
+        force: false
+      loop:
+        - "{{ admin_user }}"
+        - root
+
+    - name: Share with root the ssh keys of the user {{ admin_user }}
+      ansible.posix.authorized_key:
+        user: root
+        state: present
+        key: "{{ lookup('file', '/home/{{ admin_user }}/.ssh/id_rsa.pub') }}"
+
+    - name: Install subscription-manager if not present
+      ansible.builtin.dnf:
+        name: subscription-manager
+        state: present
+
+    - name: Register system using password
+      community.general.redhat_subscription:
+        username: "{{ rhsm_username }}"
+        password: "{{ rhsm_password }}"
+        auto_attach: true
+        state: present
+      no_log: true
+      when: rhsm_username | length > 0 and rhsm_password | length > 0
+
+    - name: Register system using activation key
+      community.general.redhat_subscription:
+        org_id: "{{ rhsm_org_id }}"
+        activationkey: "{{ rhsm_activationkey }}"
+        auto_attach: true
+        state: present
+      no_log: true
+      when: rhsm_org_id | length > 0 and rhsm_activationkey | length > 0
+
+    - name: Validate that BaseOS and AppStream repositories are enabled
+      ansible.builtin.command: subscription-manager repos --list-enabled
+      register: repos_enabled
+      failed_when:
+        - '"BaseOS" not in repos_enabled.stdout'
+        - '"AppStream" not in repos_enabled.stdout'
+      changed_when: false
+
+    - name: Install utilities
+      ansible.builtin.dnf:
+        state: present
+        disable_gpg_check: true
+        name:
+          - wget
+          - git-core
+          - rsync
+          - vim
+          - jq
+          - tree
+          - bash-completion
+          - bind-utils
+
+    - name: Configure vimrc
+      ansible.builtin.copy:
+        dest: "~{{ item }}/.vimrc"
+        mode: "0600"
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        content: |
+          syntax on
+          set nocompatible autoindent smartindent expandtab tabstop=3
+          set softtabstop=3 shiftwidth=3 number cursorline cursorcolumn showmatch
+          set scrolloff=5 sidescrolloff=5 wildmenu wildmode=longest:full laststatus=2
+          set showcmd title paste ignorecase smartcase incsearch hlsearch lazyredraw ttyfast
+          filetype plugin indent on
+          let mapleader = ","
+        force: false
+      loop:
+        - "{{ admin_user }}"
+        - root
+
+    - name: Ensure FirewallD is running and enabled
+      ansible.builtin.service:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Open HTTP and HTTPS in the default zone
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - "443/tcp"
+        - "80/tcp"
+
+    - name: Upgrade the system
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+        update_only: true
+
+    - name: Reboot machine
+      ansible.builtin.reboot:
+        msg: "Reboot initiated by Ansible after system upgrade"
+        reboot_timeout: 600
